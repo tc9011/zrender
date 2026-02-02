@@ -20,10 +20,6 @@ export function getDevicePixelRatio(): number {
  */
 export const debugMode = 0;
 
-// retina 屏幕优化
-export const devicePixelRatio = getDevicePixelRatio();
-
-
 /**
  * Determine when to turn on dark mode based on the luminance of backgroundColor
  */

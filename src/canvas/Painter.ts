@@ -1,4 +1,4 @@
-import { devicePixelRatio, getDevicePixelRatio } from '../config';
+import { getDevicePixelRatio } from '../config';
 import * as util from '../core/util';
 import Layer, { LayerConfig } from './Layer';
 import requestAnimationFrame from '../animation/requestAnimationFrame';
@@ -122,7 +122,7 @@ export default class CanvasPainter implements PainterBase {
         /**
          * @type {number}
          */
-        this.dpr = opts.devicePixelRatio || devicePixelRatio;
+        this.dpr = opts.devicePixelRatio || getDevicePixelRatio();
         /**
          * @type {boolean}
          * @private
@@ -175,7 +175,6 @@ export default class CanvasPainter implements PainterBase {
                 // TODO sting?
                 height = opts.height as number;
             }
-            this.dpr = opts.devicePixelRatio || 1;
 
             // Use canvas width and height directly
             rootCanvas.width = width * this.dpr;
@@ -844,9 +843,7 @@ export default class CanvasPainter implements PainterBase {
         height?: number | string,
         devicePixelRatio?: number
     ) {
-        const newDpr = devicePixelRatio != null
-            ? devicePixelRatio
-            : getDevicePixelRatio();
+        const newDpr = devicePixelRatio || getDevicePixelRatio();
 
         const dprChanged = newDpr !== this.dpr;
         if (dprChanged) {

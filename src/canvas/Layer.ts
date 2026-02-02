@@ -1,5 +1,4 @@
 import * as util from '../core/util';
-import {devicePixelRatio} from '../config';
 import { ImagePatternObject } from '../graphic/Pattern';
 import CanvasPainter from './Painter';
 import { GradientObject, InnerGradientObject } from '../graphic/Gradient';
@@ -108,7 +107,7 @@ export default class Layer extends Eventful {
         super();
 
         let dom;
-        dpr = dpr || devicePixelRatio;
+        dpr = dpr || 1;
         if (typeof id === 'string') {
             dom = createDom(id, painter, dpr);
         }
