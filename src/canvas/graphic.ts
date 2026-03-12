@@ -621,7 +621,7 @@ function getStyle(el: Displayable, inHover?: boolean) {
 export function brushSingle(ctx: CanvasRenderingContext2D, el: Displayable) {
     const scope = { inHover: false, viewWidth: 0, viewHeight: 0 };
     brush(ctx, el, scope);
-    brushFinalize(ctx, scope);
+    brushLoopFinalize(ctx, scope);
 }
 
 // Brush different type of elements.
@@ -789,10 +789,12 @@ export function brush(
 }
 
 /**
- * Must be called after `brush()` iterations.
+ * Must be called after `brush()` iteration finished, regardless of whether
+ * reaching `layer.__endIndex`.
+ *
  * NOTE: This method may be called with all `brush()` are skipped.
  */
-export function brushFinalize(
+export function brushLoopFinalize(
     ctx: CanvasRenderingContext2D,
     scope: BrushScope
 ) {
@@ -836,7 +838,7 @@ function brushIncremental(
         displayable.afterBrush && displayable.afterBrush();
         innerScope.prevEl = displayable;
     }
-    brushFinalize(ctx, innerScope);
+    brushLoopFinalize(ctx, innerScope);
     // Render temporary displayables.
     for (let i = 0, len = temporalDisplayables.length; i < len; i++) {
         const displayable = temporalDisplayables[i];
@@ -847,7 +849,7 @@ function brushIncremental(
         displayable.afterBrush && displayable.afterBrush();
         innerScope.prevEl = displayable;
     }
-    brushFinalize(ctx, innerScope);
+    brushLoopFinalize(ctx, innerScope);
 
     el.clearTemporalDisplayables();
     el.notClear = true;

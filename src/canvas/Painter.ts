@@ -8,7 +8,7 @@ import { NullUndefined, WXCanvasRenderingContext } from '../core/types';
 import { GradientObject } from '../graphic/Gradient';
 import { ImagePatternObject } from '../graphic/Pattern';
 import Storage from '../Storage';
-import { brush, brushFinalize, BrushScope, brushSingle } from './graphic';
+import { brush, brushLoopFinalize, BrushScope, brushSingle } from './graphic';
 import { PainterBase } from '../PainterBase';
 import BoundingRect from '../core/BoundingRect';
 import { REDRAW_BIT } from '../graphic/constants';
@@ -294,7 +294,7 @@ export default class CanvasPainter implements PainterBase {
                 brush(ctx, el, scope);
             }
         }
-        brushFinalize(ctx, scope);
+        brushLoopFinalize(ctx, scope);
         if (ctx) {
             ctx.restore();
         }
@@ -377,7 +377,9 @@ export default class CanvasPainter implements PainterBase {
         }
 
         let finished = true;
-        let needsRefreshHover = false;
+        const layersPaintCtx = {
+            needsRefreshHover: false
+        };
 
         for (let k = 0; k < layerList.length; k++) {
             const layer = layerList[k];
@@ -388,8 +390,7 @@ export default class CanvasPainter implements PainterBase {
 
             let start = paintAll ? layer.__startIndex : layer.__drawIndex;
 
-            const useTimer = !paintAll && layer.incremental && Date.now;
-            const startTime = useTimer && Date.now();
+            const useTimer = !paintAll && layer.incremental && !!Date.now;
 
             const clearColor = layer.zlevel === this._zlevelList[0]
                 ? this._backgroundColor : null;
@@ -408,49 +409,16 @@ export default class CanvasPainter implements PainterBase {
                 console.error('For some unknown reason. drawIndex is -1');
                 start = layer.__startIndex;
             }
-            let i: number;
-            /* eslint-disable-next-line */
-            const repaint = (repaintRect: BoundingRect | NullUndefined) => {
-                const scope: BrushScope = {
-                    inHover: false,
-                    allClipped: false,
-                    prevEl: null,
-                    viewWidth: this._width,
-                    viewHeight: this._height
-                };
-
-                for (i = start; i < layer.__endIndex; i++) {
-                    const el = list[i];
-
-                    if (el.__inHover) {
-                        needsRefreshHover = true;
-                    }
-
-                    this._doPaintEl(el, layer, useDirtyRect, repaintRect, scope);
-
-                    if (useTimer) {
-                        // Date.now can be executed in 13,025,305 ops/second.
-                        const dTime = Date.now() - startTime;
-                        // Give 15 millisecond to draw.
-                        // The rest elements will be drawn in the next frame.
-                        if (dTime > 15) {
-                            break;
-                        }
-                    }
-                }
-
-                brushFinalize(ctx, scope);
-            };
 
             if (repaintRects) {
                 if (repaintRects.length === 0) {
                     // Nothing to repaint, mark as finished
-                    i = layer.__endIndex;
+                    layer.__drawIndex = layer.__endIndex;
                 }
                 else {
                     const dpr = this.dpr;
                     // Set repaintRect as clipPath
-                    for (var r = 0; r < repaintRects.length; ++r) {
+                    for (let r = 0; r < repaintRects.length; ++r) {
                         const rect = repaintRects[r];
 
                         ctx.save();
@@ -463,7 +431,9 @@ export default class CanvasPainter implements PainterBase {
                         );
                         ctx.clip();
 
-                        repaint(rect);
+                        this._doPaintLayer(
+                            layersPaintCtx, layer, list, start, useTimer, rect
+                        );
                         ctx.restore();
                     }
                 }
@@ -471,11 +441,11 @@ export default class CanvasPainter implements PainterBase {
             else {
                 // Paint all once
                 ctx.save();
-                repaint(null);
+                this._doPaintLayer(
+                    layersPaintCtx, layer, list, start, useTimer, null
+                );
                 ctx.restore();
             }
-
-            layer.__drawIndex = i;
 
             if (layer.__drawIndex < layer.__endIndex) {
                 finished = false;
@@ -493,29 +463,61 @@ export default class CanvasPainter implements PainterBase {
 
         return {
             finished,
-            needsRefreshHover
+            needsRefreshHover: layersPaintCtx.needsRefreshHover,
         };
     }
 
-    private _doPaintEl(
-        el: Displayable,
-        currentLayer: Layer,
-        useDirtyRect: boolean,
-        repaintRect: BoundingRect,
-        scope: BrushScope,
-        isLast: boolean
-    ) {
-        const ctx = currentLayer.ctx;
-        if (useDirtyRect) {
-            const paintRect = el.getPaintRect();
-            if (!repaintRect || paintRect && paintRect.intersect(repaintRect)) {
+    private _doPaintLayer(
+        layersPaintCtx: {
+            needsRefreshHover: boolean;
+        },
+        layer: Layer,
+        list: Displayable[],
+        idx: number,
+        useTimer: boolean,
+        repaintRect: BoundingRect | NullUndefined,
+    ): void {
+        const scope: BrushScope = {
+            inHover: false,
+            allClipped: false,
+            prevEl: null,
+            viewWidth: this._width,
+            viewHeight: this._height
+        };
+        const ctx = layer.ctx;
+        const startTime = useTimer && Date.now();
+
+        for (; idx < layer.__endIndex; idx++) {
+            const el = list[idx];
+
+            if (el.__inHover) {
+                layersPaintCtx.needsRefreshHover = true;
+            }
+
+            if (repaintRect != null) {
+                const paintRect = el.getPaintRect();
+                if (paintRect && paintRect.intersect(repaintRect)) {
+                    brush(ctx, el, scope);
+                    el.setPrevPaintRect(paintRect);
+                }
+            }
+            else {
                 brush(ctx, el, scope);
-                el.setPrevPaintRect(paintRect);
+            }
+
+            if (useTimer) {
+                // Date.now can be executed in 13,025,305 ops/second.
+                const dTime = Date.now() - startTime;
+                // Give 15 millisecond to draw.
+                // The rest elements will be drawn in the next frame.
+                if (dTime > 15) {
+                    break;
+                }
             }
         }
-        else {
-            brush(ctx, el, scope);
-        }
+        brushLoopFinalize(ctx, scope);
+
+        layer.__drawIndex = idx;
     }
 
     /**
@@ -954,7 +956,7 @@ export default class CanvasPainter implements PainterBase {
                 const el = displayList[i];
                 brush(ctx, el, scope);
             }
-            brushFinalize(ctx, scope);
+            brushLoopFinalize(ctx, scope);
         }
 
         return imageLayer.dom;
