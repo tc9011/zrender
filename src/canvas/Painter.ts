@@ -4,11 +4,11 @@ import Layer, { LayerConfig } from './Layer';
 import requestAnimationFrame from '../animation/requestAnimationFrame';
 import env from '../core/env';
 import Displayable from '../graphic/Displayable';
-import { WXCanvasRenderingContext } from '../core/types';
+import { NullUndefined, WXCanvasRenderingContext } from '../core/types';
 import { GradientObject } from '../graphic/Gradient';
 import { ImagePatternObject } from '../graphic/Pattern';
 import Storage from '../Storage';
-import { brush, BrushScope, brushSingle } from './graphic';
+import { brush, brushFinalize, BrushScope, brushSingle } from './graphic';
 import { PainterBase } from '../PainterBase';
 import BoundingRect from '../core/BoundingRect';
 import { REDRAW_BIT } from '../graphic/constants';
@@ -291,10 +291,10 @@ export default class CanvasPainter implements PainterBase {
                     ctx = hoverLayer.ctx;
                     ctx.save();
                 }
-
-                brush(ctx, el, scope, i === len - 1);
+                brush(ctx, el, scope);
             }
         }
+        brushFinalize(ctx, scope);
         if (ctx) {
             ctx.restore();
         }
@@ -410,7 +410,7 @@ export default class CanvasPainter implements PainterBase {
             }
             let i: number;
             /* eslint-disable-next-line */
-            const repaint = (repaintRect?: BoundingRect) => {
+            const repaint = (repaintRect: BoundingRect | NullUndefined) => {
                 const scope: BrushScope = {
                     inHover: false,
                     allClipped: false,
@@ -426,7 +426,7 @@ export default class CanvasPainter implements PainterBase {
                         needsRefreshHover = true;
                     }
 
-                    this._doPaintEl(el, layer, useDirtyRect, repaintRect, scope, i === layer.__endIndex - 1);
+                    this._doPaintEl(el, layer, useDirtyRect, repaintRect, scope);
 
                     if (useTimer) {
                         // Date.now can be executed in 13,025,305 ops/second.
@@ -439,10 +439,7 @@ export default class CanvasPainter implements PainterBase {
                     }
                 }
 
-                if (scope.prevElClipPaths) {
-                    // Needs restore the state. If last drawn element is in the clipping area.
-                    ctx.restore();
-                }
+                brushFinalize(ctx, scope);
             };
 
             if (repaintRects) {
@@ -474,7 +471,7 @@ export default class CanvasPainter implements PainterBase {
             else {
                 // Paint all once
                 ctx.save();
-                repaint();
+                repaint(null);
                 ctx.restore();
             }
 
@@ -512,12 +509,12 @@ export default class CanvasPainter implements PainterBase {
         if (useDirtyRect) {
             const paintRect = el.getPaintRect();
             if (!repaintRect || paintRect && paintRect.intersect(repaintRect)) {
-                brush(ctx, el, scope, isLast);
+                brush(ctx, el, scope);
                 el.setPrevPaintRect(paintRect);
             }
         }
         else {
-            brush(ctx, el, scope, isLast);
+            brush(ctx, el, scope);
         }
     }
 
@@ -947,7 +944,7 @@ export default class CanvasPainter implements PainterBase {
         }
         else {
             // PENDING, echarts-gl and incremental rendering.
-            const scope = {
+            const scope: BrushScope = {
                 inHover: false,
                 viewWidth: this._width,
                 viewHeight: this._height
@@ -955,8 +952,9 @@ export default class CanvasPainter implements PainterBase {
             const displayList = this.storage.getDisplayList(true);
             for (let i = 0, len = displayList.length; i < len; i++) {
                 const el = displayList[i];
-                brush(ctx, el, scope, i === len - 1);
+                brush(ctx, el, scope);
             }
+            brushFinalize(ctx, scope);
         }
 
         return imageLayer.dom;

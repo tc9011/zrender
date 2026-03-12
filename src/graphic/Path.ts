@@ -145,7 +145,9 @@ class Path<Props extends PathProps = PathProps> extends Displayable<Props> {
 
     style: PathStyleProps
     /**
-     * If element can be batched automatically
+     * Whether elements can be batched (call `fill()` and `stroke()` only once) if possible.
+     * Users should guarantee batched elements are consecutive in display list (sorted by
+     * zlevel, z, z2) and has the same style, otherwise the effect may be unexpected.
      */
     autoBatch: boolean
 

@@ -11,6 +11,13 @@ export type ArrayLike<T> = {
     length: number
 }
 
+/**
+ * NOTICE: For historical reason, zrender have not enabled TS config
+ * `strictNullChecks` yet. Therefore, a explicitly declared `NullUndefined` can
+ * indicate a variable can be `null` or `undefined` without more investigation,
+ * but a variable without `NullUndefined` may also be `null` or `undefined`,
+ * which has to be determined by the implementation.
+ */
 export type NullUndefined = null | undefined;
 
 export type ImageLike = HTMLImageElement | HTMLCanvasElement | HTMLVideoElement
