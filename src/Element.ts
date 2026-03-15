@@ -32,7 +32,7 @@ import { LIGHT_LABEL_COLOR, DARK_LABEL_COLOR } from './config';
 import { parse, stringify } from './tool/color';
 import { REDRAW_BIT } from './graphic/constants';
 import { invert } from './core/matrix';
-import type { DisplayableProps } from './graphic/Displayable';
+// import type { DisplayableProps } from './graphic/Displayable';
 
 export interface ElementAnimateConfig {
     duration?: number
