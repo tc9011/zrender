@@ -2,7 +2,10 @@
  * Base class of all displayable graphic objects
  */
 
-import Element, {ElementProps, ElementStatePropNames, ElementAnimateConfig, ElementCommonState} from '../Element';
+import Element, {
+    ElementProps, ElementStatePropNames, ElementAnimateConfig, ElementCommonState,
+    IN_HOVER_LAYER_KIND_ONLY_STYLE_CHANGE,
+} from '../Element';
 import BoundingRect from '../core/BoundingRect';
 import { PropType, Dictionary, MapToType } from '../core/types';
 import Path from './Path';
@@ -134,6 +137,7 @@ class Displayable<Props extends DisplayableProps = DisplayableProps> extends Ele
      */
     ignoreCoarsePointer?: boolean
 
+    // FIXME: do not use TS any.
     style: Dictionary<any>
 
     protected _normalState: DisplayableState
@@ -200,7 +204,7 @@ class Displayable<Props extends DisplayableProps = DisplayableProps> extends Ele
         viewWidth: number,
         viewHeight: number,
         considerClipPath: boolean,
-        considerAncestors: boolean
+        considerAncestors: boolean,
     ) {
         const m = this.transform;
         if (
@@ -413,13 +417,20 @@ class Displayable<Props extends DisplayableProps = DisplayableProps> extends Ele
         if (!obj[STYLE_MAGIC_KEY]) {
             obj = this.createStyle(obj);
         }
-        if (this.__inHover) {
-            this.__hoverStyle = obj;    // Not affect exists style.
-        }
-        else {
-            this.style = obj;
-        }
+        // // See the comment `HOVER_LAYER_CONSTRAINTS` for `hoverStyle` case.
+        this.style = obj;
         this.dirtyStyle();
+    }
+
+    protected _useHoverStyle(obj: Props['style']) {
+        this.__hoverStyle = obj;
+        // this.dirtyStyle();
+        // PENDING:
+        // Since HOVER_LAYER_CONSTRAINTS_TEXT_CONTENT is not supported, no need to call
+        // `this.dirtyStyle()` here.
+        // Sub texts updating requires `this.dirtyStyle()` to trigger them.
+        // But a STYLE_CHANGED_BIT may cause repaint of the original layer if new TSpan is
+        // created or updated, which is unexpected when hover layer is used.
     }
 
     /**
@@ -457,6 +468,10 @@ class Displayable<Props extends DisplayableProps = DisplayableProps> extends Ele
         super._applyStateObj(stateName, state, normalState, keepCurrentStates, transition, animationCfg);
 
         const needsRestoreToNormal = !(state && keepCurrentStates);
+        const inHoverOnlyStyleChange = this.__inHover === IN_HOVER_LAYER_KIND_ONLY_STYLE_CHANGE;
+
+        // NOTE: `transition` has been garanteed `false` when `this.__inHover` is a truthy value.
+
         let targetStyle: Props['style'];
         if (state && state.style) {
             // Only animate changed properties.
@@ -482,7 +497,7 @@ class Displayable<Props extends DisplayableProps = DisplayableProps> extends Ele
         }
 
         if (targetStyle) {
-            if (transition) {
+            if (transition) { // transition must be false if hoverLayer is used.
                 // Clone a new style. Not affect the original one.
                 const sourceStyle = this.style;
 
@@ -518,23 +533,30 @@ class Displayable<Props extends DisplayableProps = DisplayableProps> extends Ele
                 } as Props, animationCfg, this.getAnimationStyleProps() as MapToType<Props, boolean>);
             }
             else {
-                this.useStyle(targetStyle);
+                if (inHoverOnlyStyleChange) {
+                    this._useHoverStyle(targetStyle);
+                }
+                else {
+                    this.useStyle(targetStyle);
+                }
             }
         }
 
         // Don't change z, z2 for element moved into hover layer.
         // It's not necessary and will cause paint list order changed.
-        const statesKeys = this.__inHover ? PRIMARY_STATES_KEYS_IN_HOVER_LAYER : PRIMARY_STATES_KEYS;
-        for (let i = 0; i < statesKeys.length; i++) {
-            let key = statesKeys[i];
-            if (state && state[key] != null) {
-                // Replace if it exist in target state
-                (this as any)[key] = state[key];
-            }
-            else if (needsRestoreToNormal) {
-                // Restore to normal state
-                if (normalState[key] != null) {
-                    (this as any)[key] = normalState[key];
+        if (!inHoverOnlyStyleChange) {
+            const statesKeys = this.__inHover ? PRIMARY_STATES_KEYS_IN_HOVER_LAYER : PRIMARY_STATES_KEYS;
+            for (let i = 0; i < statesKeys.length; i++) {
+                let key = statesKeys[i];
+                if (state && state[key] != null) {
+                    // Replace if it exist in target state
+                    (this as any)[key] = state[key];
+                }
+                else if (needsRestoreToNormal) {
+                    // Restore to normal state
+                    if (normalState[key] != null) {
+                        (this as any)[key] = normalState[key];
+                    }
                 }
             }
         }

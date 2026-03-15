@@ -434,10 +434,10 @@ function bindPathAndTextCommonStyle(
     forceSetAll: boolean,
     scope: BrushScope
 ) {
-    const style = getStyle(el, scope.inHover);
+    const style = el.style;
     const prevStyle = forceSetAll
         ? null
-        : (prevEl && getStyle(prevEl, scope.inHover) || {});
+        : (prevEl && prevEl.style || {});
     // Shared same style. prevStyle will be null if forceSetAll.
     if (style === prevStyle) {
         return false;
@@ -507,8 +507,8 @@ function bindImageStyle(
 ) {
     return bindCommonProps(
         ctx,
-        getStyle(el, scope.inHover),
-        prevEl && getStyle(prevEl, scope.inHover),
+        el.style,
+        prevEl && prevEl.style,
         forceSetAll,
         scope
     );
@@ -614,10 +614,6 @@ function flushPathDrawn(ctx: CanvasRenderingContext2D, scope: BrushScope) {
     }
 }
 
-function getStyle(el: Displayable, inHover?: boolean) {
-    return inHover ? (el.__hoverStyle || el.style) : el.style;
-}
-
 export function brushSingle(ctx: CanvasRenderingContext2D, el: Displayable) {
     const scope = { inHover: false, viewWidth: 0, viewHeight: 0 };
     brush(ctx, el, scope);
@@ -645,6 +641,7 @@ export function brush(
     // HANDLE CLIPPING
     const clipPaths = el.__clipPaths;
     const prevElClipPaths = scope.prevElClipPaths;
+    const style = el.style;
 
     let forceSetTransform = false;
     let forceSetStyle = false;
@@ -712,7 +709,7 @@ export function brush(
 
     let canBatchPath = el instanceof Path   // Only path supports batch
         && el.autoBatch
-        && canPathBatch(el.style);
+        && canPathBatch(style);
 
     if (forceSetTransform || isTransformChanged(m, prevEl.transform)) {
         // Flush
@@ -724,7 +721,6 @@ export function brush(
         flushPathDrawn(ctx, scope);
     }
 
-    const style = getStyle(el, scope.inHover);
     if (el instanceof Path) {
         // PENDING do we need to rebind all style if displayable type changed?
         if (scope.lastDrawType !== DRAW_TYPE_PATH) {
