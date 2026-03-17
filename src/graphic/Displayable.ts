@@ -434,7 +434,7 @@ class Displayable<Props extends DisplayableProps = DisplayableProps> extends Ele
         this.__hoverStyle = obj;
         // this.dirtyStyle();
         // PENDING:
-        // Since HOVER_LAYER_CONSTRAINTS_TEXT_CONTENT is not supported, no need to call
+        // Since HOVER_LAYER_CONSTRAINTS_TEXT is not supported, no need to call
         // `this.dirtyStyle()` here.
         // Sub texts updating requires `this.dirtyStyle()` to trigger them.
         // But a STYLE_CHANGED_BIT may cause repaint of the original layer if new TSpan is
