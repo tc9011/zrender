@@ -127,10 +127,18 @@ class Displayable<Props extends DisplayableProps = DisplayableProps> extends Ele
      * If hover area is bounding rect
      */
     rectHover: boolean
+
     /**
      * For increamental rendering
      */
     incremental: boolean
+
+    /**
+     * For an incremental element, it can prevent its incremental layer
+     * from clearing. Only the first incremental element on a layer can
+     * use `notClear`.
+     */
+    notClear?: boolean
 
     /**
      * Never increase to target size

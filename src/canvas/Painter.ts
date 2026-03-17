@@ -13,13 +13,26 @@ import { PainterBase } from '../PainterBase';
 import BoundingRect from '../core/BoundingRect';
 import { REDRAW_BIT } from '../graphic/constants';
 import { getSize } from './helper';
-import type IncrementalDisplayable from '../graphic/IncrementalDisplayable';
+
 
 const HOVER_LAYER_ZLEVEL = 1e5;
 const CANVAS_ZLEVEL = 314159;
 
 const EL_AFTER_INCREMENTAL_INC = 0.01;
 const INCREMENTAL_INC = 0.001;
+
+// Truthy value means dirty.
+type HoverLayerDirty =
+    typeof HOVER_LAYER_DIRTY_NO
+    | typeof HOVER_LAYER_DIRTY_REPAINT_IF_EXISTING
+    | typeof HOVER_LAYER_DIRTY_REPAINT
+// Do noting to hover layer.
+const HOVER_LAYER_DIRTY_NO: undefined = undefined;
+// Repaint only if existing. In most cases hover layer is not used,
+// do not need to travel one more time to detect hover state.
+const HOVER_LAYER_DIRTY_REPAINT_IF_EXISTING = 1;
+// Create a hover layer if not existing, and repaint.
+const HOVER_LAYER_DIRTY_REPAINT = 2;
 
 
 function isLayerValid(layer: Layer) {
@@ -70,6 +83,19 @@ interface CanvasPainterOption {
     useDirtyRect?: boolean
 }
 
+export type CanvasPainterRefreshOpt = {
+    // repaint all displayable, rather than only dirty ones.
+    paintAll?: boolean;
+
+    // By default true. Can set to false to skip the normal repaint for
+    // the case that only hover layer need to be repainted.
+    refresh?: boolean;
+    // By default false. If true, for repaint hover layer.
+    // Note that a hover layer will also be repainted if normal layers are
+    // repainted and mark dirty to hover layer, even if refreshHover is false.
+    refreshHover?: boolean;
+}
+
 export default class CanvasPainter implements PainterBase {
 
     type = 'canvas'
@@ -104,6 +130,16 @@ export default class CanvasPainter implements PainterBase {
 
     private _hoverlayer: Layer
 
+    // hover layer is created only when needed, not save dirty flag separately.
+    // We need to detect hover layer requirements in this cases:
+    //  (A) Hover state exist when the element is drawing, especially in progressive case.
+    //  (B) Hover state is applied after the element has been drawn and keep no dirty.
+    // We need to avoid repeatedly drawing the hover layer, especially in progressive case.
+    // Hover layer should be cleared whenever a normal layer is cleared.
+    // otherwise it can not follow the elements changing.
+    // For example, the original el may have been moved.
+    private _hoverLayerDirty: HoverLayerDirty
+
     private _redrawId: number
 
     private _backgroundColor: string | GradientObject | ImagePatternObject
@@ -119,25 +155,15 @@ export default class CanvasPainter implements PainterBase {
 
         this._opts = opts = util.extend({}, opts || {}) as CanvasPainterOption;
 
-        /**
-         * @type {number}
-         */
         this.dpr = opts.devicePixelRatio || devicePixelRatio;
-        /**
-         * @type {boolean}
-         * @private
-         */
+
         this._singleCanvas = singleCanvas;
-        /**
-         * 绘图容器
-         * @type {HTMLElement}
-         */
+
         this.root = root;
 
         const rootStyle = root.style;
 
         if (rootStyle) {
-            // @ts-ignore
             util.disableUserSelect(root);
             root.innerHTML = '';
         }
@@ -226,21 +252,31 @@ export default class CanvasPainter implements PainterBase {
         }
     }
 
-    /**
-     * 刷新
-     * @param paintAll 强制绘制所有displayable
-     */
-    refresh(paintAll?: boolean) {
-        const list = this.storage.getDisplayList(true);
-        const prevList = this._prevDisplayList;
+    refresh(opt?: CanvasPainterRefreshOpt) {
+        opt = opt || {};
+        const refresh = util.retrieve2(opt.refresh, true);
+        const refreshHover = util.retrieve2(opt.refreshHover, false);
 
-        const zlevelList = this._zlevelList;
+        if (refreshHover) {
+            this._hoverLayerDirty = HOVER_LAYER_DIRTY_REPAINT;
+        }
+
+        if (!refresh) {
+            if (refreshHover) {
+                this._paintHoverList(this.storage.getDisplayList(false));
+            }
+            return this;
+        }
+
+        const list = this.storage.getDisplayList(true);
+        this._updateLayerStatus(list);
 
         this._redrawId = Math.random();
+        const prevList = this._prevDisplayList;
+        this._paintList(list, prevList, opt.paintAll, this._redrawId);
 
-        this._paintList(list, prevList, paintAll, this._redrawId);
-
-        // Paint custum layers
+        // Paint custom layers
+        const zlevelList = this._zlevelList;
         for (let i = 0; i < zlevelList.length; i++) {
             const z = zlevelList[i];
             const layer = this._layers[z];
@@ -257,22 +293,27 @@ export default class CanvasPainter implements PainterBase {
         return this;
     }
 
-
-    refreshHover() {
-        this._paintHoverList(this.storage.getDisplayList(false), true);
-    }
-
-    private _paintHoverList(list: Displayable[], needsRefreshHover: boolean) {
+    private _paintHoverList(list: Displayable[]): void {
         let hoverLayer = this._hoverlayer;
-        if (hoverLayer && hoverLayer.__used) {
-            hoverLayer.clear();
-            hoverLayer.__used = false;
-        }
+        const hoverLayerDirty = this._hoverLayerDirty;
+        // Always clear dirty flag before return.
+        this._hoverLayerDirty = HOVER_LAYER_DIRTY_NO;
 
-        let len = list.length;
-        if (!needsRefreshHover || !len) {
+        if (hoverLayerDirty === HOVER_LAYER_DIRTY_NO) {
             return;
         }
+
+        if (!hoverLayer && hoverLayerDirty === HOVER_LAYER_DIRTY_REPAINT) {
+            hoverLayer = this._hoverlayer = this.getLayer(HOVER_LAYER_ZLEVEL);
+        }
+
+        if (!hoverLayer) {
+            return;
+        }
+
+        // Clear the previous content. But use _hoverLayerDirty to avoid
+        // unnecessarily repeated clearing.
+        hoverLayer.clear();
 
         const scope: BrushScope = {
             inHover: true,
@@ -281,51 +322,52 @@ export default class CanvasPainter implements PainterBase {
         };
 
         let ctx;
-        for (let i = 0; i < len; i++) {
+        for (let i = 0, len = list.length; i < len; i++) {
             const el = list[i];
-            if (el.__inHover) {
-                // Use a extream large zlevel
-                // FIXME?
-                if (!hoverLayer) {
-                    hoverLayer = this._hoverlayer = this.getLayer(HOVER_LAYER_ZLEVEL);
-                }
-                if (!ctx) {
-                    ctx = hoverLayer.ctx;
-                    ctx.save();
-                }
-                // `el.style` is replaced with `el.__hoverStyle` when and only when hover layer is brushing.
-                // Any omission or any over replacing may cause incorrect result.
-                // Consider a problematic case:
-                //  Suppose an element fades out via `opacity:0`, which is set into `this.style` via `el.attr()`,
-                //  and then new styles (including `opacity: 0.8`) are assigned to `this.__hoverStyle` via
-                //  `el.useStyle()`, but `saveCurrentToNormalState` uses `this.style`, the element will never be
-                //  displayed.
-                // And notice upstream libraries, such as echarts, typically call `useStyle()` in every update
-                // cycle. It should write to `this.style` as normal, rather than to `__hoverStyle`, since
-                // `this.style` is the source of `saveCurrentToNormalState` when state switching.
-                const hoverStyle = el.__hoverStyle;
-                let originalStyle: Displayable['style'];
-                if (hoverStyle) {
-                    originalStyle = el.style;
-                    el.style = hoverStyle;
-                }
-                brush(ctx, el, scope);
-                if (hoverStyle) {
-                    el.style = originalStyle;
-                }
+            if (!el.__inHover) {
+                continue;
+            }
+            if (!ctx) {
+                ctx = hoverLayer.ctx;
+                ctx.save();
+            }
+            // `el.style` is replaced with `el.__hoverStyle` when and only when hover layer is brushing.
+            // Any omission or any over replacing may cause incorrect result.
+            // Consider a problematic case:
+            //  Suppose an element fades out via `opacity:0`, which is set into `this.style` via `el.attr()`,
+            //  and then new styles (including `opacity: 0.8`) are assigned to `this.__hoverStyle` via
+            //  `el.useStyle()`, but `saveCurrentToNormalState` uses `this.style`, the element will never be
+            //  displayed.
+            // And notice upstream libraries, such as echarts, typically call `useStyle()` in every update
+            // cycle. It should write to `this.style` as normal, rather than to `__hoverStyle`, since
+            // `this.style` is the source of `saveCurrentToNormalState` when state switching.
+            const hoverStyle = el.__hoverStyle;
+            let originalStyle: Displayable['style'];
+            if (hoverStyle) {
+                originalStyle = el.style;
+                el.style = hoverStyle;
+            }
+            brush(ctx, el, scope);
+            if (hoverStyle) {
+                el.style = originalStyle;
             }
         }
         if (ctx) {
             brushLoopFinalize(ctx, scope);
-            hoverLayer.__used = true;
             ctx.restore();
         }
     }
 
+    /**
+     * @deprecated
+     */
     getHoverLayer() {
         return this.getLayer(HOVER_LAYER_ZLEVEL);
     }
 
+    /**
+     * @deprecated
+     */
     paintOne(ctx: CanvasRenderingContext2D, el: Displayable) {
         brushSingle(ctx, el);
     }
@@ -335,17 +377,11 @@ export default class CanvasPainter implements PainterBase {
             return;
         }
 
-        paintAll = paintAll || false;
-
-        this._updateLayerStatus(list);
-
-        const {finished, needsRefreshHover} = this._doPaintList(list, prevList, paintAll);
+        const finished = this._doPaintList(list, prevList, paintAll);
 
         if (this._needsManuallyCompositing) {
             this._compositeManually();
         }
-
-        this._paintHoverList(list, needsRefreshHover);
 
         if (!finished) {
             const self = this;
@@ -354,9 +390,17 @@ export default class CanvasPainter implements PainterBase {
             });
         }
         else {
-            this.eachLayer(layer => {
-                layer.afterBrush && layer.afterBrush();
+            const hoverLayer = this._hoverlayer;
+            this.eachLayer(function (layer) {
+                if (layer !== hoverLayer) {
+                    layer.afterBrush && layer.afterBrush();
+                }
             });
+            // Hover layer may be dirty during progressive rendering unfinished without
+            // affecting progressive rendering. Therefore we do NOT paint hover layer
+            // per frame following _doPaintList, instead, we simply repaint it once after
+            // finished.
+            this._paintHoverList(list);
         }
     }
 
@@ -377,10 +421,8 @@ export default class CanvasPainter implements PainterBase {
         list: Displayable[],
         prevList: Displayable[],
         paintAll?: boolean
-    ): {
-        finished: boolean
-        needsRefreshHover: boolean
-    } {
+        // Return: finished
+    ): boolean {
         const layerList = [];
         const useDirtyRect = this._opts.useDirtyRect;
         for (let zi = 0; zi < this._zlevelList.length; zi++) {
@@ -395,9 +437,6 @@ export default class CanvasPainter implements PainterBase {
         }
 
         let finished = true;
-        const layersPaintCtx = {
-            needsRefreshHover: false
-        };
 
         for (let k = 0; k < layerList.length; k++) {
             const layer = layerList[k];
@@ -414,18 +453,25 @@ export default class CanvasPainter implements PainterBase {
                 ? this._backgroundColor : null;
 
             // All elements in this layer are removed.
+            let layerCleared;
             if (layer.__startIndex === layer.__endIndex) {
                 layer.clear(false, clearColor, repaintRects);
+                layerCleared = true;
             }
             else if (start === layer.__startIndex) {
                 const firstEl = list[start];
-                if (!firstEl.incremental || !(firstEl as IncrementalDisplayable).notClear || paintAll) {
+                if (!firstEl.incremental || !firstEl.notClear || paintAll) {
                     layer.clear(false, clearColor, repaintRects);
+                    layerCleared = true;
                 }
             }
             if (start === -1) {
                 console.error('For some unknown reason. drawIndex is -1');
                 start = layer.__startIndex;
+            }
+
+            if (layerCleared && this._hoverLayerDirty === HOVER_LAYER_DIRTY_NO) {
+                this._hoverLayerDirty = HOVER_LAYER_DIRTY_REPAINT_IF_EXISTING;
             }
 
             if (repaintRects) {
@@ -450,7 +496,7 @@ export default class CanvasPainter implements PainterBase {
                         ctx.clip();
 
                         this._doPaintLayer(
-                            layersPaintCtx, layer, list, start, useTimer, rect
+                            layer, list, start, useTimer, rect
                         );
                         ctx.restore();
                     }
@@ -460,7 +506,7 @@ export default class CanvasPainter implements PainterBase {
                 // Paint all once
                 ctx.save();
                 this._doPaintLayer(
-                    layersPaintCtx, layer, list, start, useTimer, null
+                    layer, list, start, useTimer, null
                 );
                 ctx.restore();
             }
@@ -479,16 +525,10 @@ export default class CanvasPainter implements PainterBase {
             });
         }
 
-        return {
-            finished,
-            needsRefreshHover: layersPaintCtx.needsRefreshHover,
-        };
+        return finished;
     }
 
     private _doPaintLayer(
-        layersPaintCtx: {
-            needsRefreshHover: boolean;
-        },
         layer: Layer,
         list: Displayable[],
         idx: number,
@@ -505,13 +545,21 @@ export default class CanvasPainter implements PainterBase {
         const ctx = layer.ctx;
         const startTime = useTimer && Date.now();
 
-        for (; idx < layer.__endIndex; idx++) {
+        const layerEndIdx = layer.__endIndex;
+
+        for (; idx < layerEndIdx; idx++) {
             const el = list[idx];
 
             if (el.__inHover) {
-                // NOTE: el is always painted to normal layers regardless of
-                // whether it will be painted to a hover layer.
-                layersPaintCtx.needsRefreshHover = true;
+                // To avoid repeatedly repaint hover layer in progressive rendering,
+                // set HOVER_LAYER_DIRTY_REPAINT only when needed.
+                // Notice rendered el may not be traveled here again if the layer is not dirty,
+                // in this case HOVER_LAYER_DIRTY_REPAINT is set via markRedraw() calling
+                // zr.refreshHover().
+                this._hoverLayerDirty = HOVER_LAYER_DIRTY_REPAINT;
+                // NOTE: To ensure a consistent composited visual effect, `el` should be
+                // always painted to normal layers regardless of whether it will be painted
+                // to a hover layer.
             }
 
             if (repaintRect != null) {
@@ -541,11 +589,10 @@ export default class CanvasPainter implements PainterBase {
     }
 
     /**
-     * 获取 zlevel 所在层，如果不存在则会创建一个新的层
-     * @param zlevel
-     * @param virtual Virtual layer will not be inserted into dom.
+     * Obtain a layer; create one if not exist.
      */
     getLayer(zlevel: number, virtual?: boolean) {
+        // TODO: Need refactor - relaying on _needsManuallyCompositing is bug-prone.
         if (this._singleCanvas && !this._needsManuallyCompositing) {
             zlevel = CANVAS_ZLEVEL;
         }
@@ -682,13 +729,10 @@ export default class CanvasPainter implements PainterBase {
         return this._layers;
     }
 
-    _updateLayerStatus(list: Displayable[]) {
-        const hoverLayer = this._hoverlayer;
+    private _updateLayerStatus(list: Displayable[]): void {
 
-        this.eachBuiltinLayer(function (layer, z) {
-            if (layer !== hoverLayer) {
-                layer.__dirty = layer.__used = false;
-            }
+        this.eachBuiltinLayer(function (layer) {
+            layer.__dirty = layer.__used = false;
         });
 
         function updatePrevLayer(idx: number) {
@@ -718,6 +762,7 @@ export default class CanvasPainter implements PainterBase {
         for (i = 0; i < list.length; i++) {
             const el = list[i];
             const zlevel = el.zlevel;
+
             let layer;
 
             if (prevZlevel !== zlevel) {
@@ -734,6 +779,12 @@ export default class CanvasPainter implements PainterBase {
             // ----------------------zlevel + INCREMENTAL_INC------------------------
             //              (Element drawn before incremental element)
             // --------------------------------zlevel--------------------------------
+            // These cases are covered per incremental layer:
+            //  (A) An single incremental element (`IncrementalDisplayable`-ish) with
+            //      `notClear` to control the progressive drawing.
+            //  (B) Multiple consecutive incremental elements, progressively drawing
+            //      per frame in `_paintList`. This is not an optimal way due to the
+            //      more cost in updating and sorting, but can carry varying styles.
             if (el.incremental) {
                 layer = this.getLayer(zlevel + INCREMENTAL_INC, this._needsManuallyCompositing);
                 layer.incremental = true;
@@ -751,21 +802,30 @@ export default class CanvasPainter implements PainterBase {
             }
 
             if (layer !== prevLayer) {
+                // Then this is the first element in this layer.
                 layer.__used = true;
                 if (layer.__startIndex !== i) {
                     layer.__dirty = true;
+                    // PENDING: If displayList indices of incremental elements are changed due
+                    // to the previous but irrelevant elements, no need to restart the drawing.
+                    // That might degrade the case "multiple consecutive incremental elements".
                 }
                 layer.__startIndex = i;
                 if (!layer.incremental) {
+                    // normal layers always redraw from the beginning.
                     layer.__drawIndex = i;
                 }
                 else {
                     // Mark layer draw index needs to update.
+                    // __drawIndex will be set later as the first dirty element in this layer,
+                    // rather than the first element in this layer.
                     layer.__drawIndex = -1;
                 }
+
                 updatePrevLayer(i);
                 prevLayer = layer;
             }
+
             if ((el.__dirty & REDRAW_BIT) && !el.__inHover) {  // Ignore dirty elements in hover layer.
                 layer.__dirty = true;
                 if (layer.incremental && layer.__drawIndex < 0) {
@@ -778,28 +838,26 @@ export default class CanvasPainter implements PainterBase {
         updatePrevLayer(i);
 
         this.eachBuiltinLayer(function (layer, z) {
-            if (layer === hoverLayer) {
+            if (layer === this._hoverlayer) {
                 return;
             }
             // Used in last frame but not in this frame. Needs clear
             if (!layer.__used && layer.getElementCount() > 0) {
                 layer.__dirty = true;
-                layer.__startIndex = layer.__endIndex = layer.__drawIndex = 0;
+                layer.__startIndex = layer.__drawIndex = layer.__endIndex = 0;
             }
             // For incremental layer. In case start index changed and no elements are dirty.
             if (layer.__dirty && layer.__drawIndex < 0) {
                 layer.__drawIndex = layer.__startIndex;
             }
-        });
+        }, this);
     }
 
     clear() {
-        this.eachBuiltinLayer(this._clearLayer);
+        this.eachBuiltinLayer(function (layer) {
+            layer.clear();
+        });
         return this;
-    }
-
-    _clearLayer(layer: Layer) {
-        layer.clear();
     }
 
     setBackgroundColor(backgroundColor: string | GradientObject | ImagePatternObject) {
@@ -895,7 +953,7 @@ export default class CanvasPainter implements PainterBase {
                     }
                 }
 
-                this.refresh(true);
+                this.refresh({paintAll: true});
             }
 
             this._width = width;

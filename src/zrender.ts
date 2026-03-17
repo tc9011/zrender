@@ -25,6 +25,7 @@ import Displayable from './graphic/Displayable';
 import { lum } from './tool/color';
 import { DARK_MODE_THRESHOLD } from './config';
 import Group from './graphic/Group';
+import { CanvasPainterRefreshOpt } from './canvas/Painter';
 
 
 type PainterBaseCtor = {
@@ -141,7 +142,7 @@ class ZRender {
 
         this.animation = new Animation({
             stage: {
-                update: ssrMode ? null : () => this._flush(true)
+                update: ssrMode ? null : () => this._flush(false)
             }
         });
 
@@ -220,12 +221,23 @@ class ZRender {
     /**
      * Repaint the canvas immediately
      */
-    refreshImmediately(fromInside?: boolean) {
+    refreshImmediately(noAnimationUpdate?: boolean) {
         if (this._disposed) {
             return;
         }
-        // const start = new Date();
-        if (!fromInside) {
+        this._refresh({
+            animUpdate: !noAnimationUpdate,
+            refresh: true,
+            refreshHover: false,
+        });
+    }
+
+    private _refresh(opt: {
+        animUpdate: boolean;
+        refresh: CanvasPainterRefreshOpt['refresh']; // work for only CanvasPainter
+        refreshHover: CanvasPainterRefreshOpt['refreshHover']; // work for only CanvasPainter
+    }) {
+        if (opt.animUpdate) {
             // Update animation if refreshImmediately is invoked from outside.
             // Not trigger stage update to call flush again. Which may refresh twice
             this.animation.update(true);
@@ -233,10 +245,14 @@ class ZRender {
 
         // Clear needsRefresh ahead to avoid something wrong happens in refresh
         // Or it will cause zrender refreshes again and again.
-        this._needsRefresh = false;
-        this.painter.refresh();
-        // Avoid trigger zr.refresh in Element#beforeUpdate hook
-        this._needsRefresh = false;
+        this._needsRefresh = this._needsRefreshHover = false;
+        this.painter.refresh({
+            refresh: opt.refresh,
+            refreshHover: opt.refreshHover,
+        });
+        // Avoid trigger zr.refresh in Element#beforeUpdate hook.
+        // Hover layer is always refreshed when refreshing normal layers.
+        this._needsRefresh = this._needsRefreshHover = false;
     }
 
     /**
@@ -258,21 +274,22 @@ class ZRender {
         if (this._disposed) {
             return;
         }
-        this._flush(false);
+        this._flush(true);
     }
 
-    private _flush(fromInside?: boolean) {
+    private _flush(animationUpdate: boolean) {
         let triggerRendered;
 
         const start = getTime();
-        if (this._needsRefresh) {
+        const needsRefresh = this._needsRefresh;
+        const needsRefreshHover = this._needsRefreshHover;
+        if (needsRefresh || needsRefreshHover) {
             triggerRendered = true;
-            this.refreshImmediately(fromInside);
-        }
-
-        if (this._needsRefreshHover) {
-            triggerRendered = true;
-            this.refreshHoverImmediately();
+            this._refresh({
+                animUpdate: animationUpdate,
+                refresh: needsRefresh,
+                refreshHover: needsRefreshHover,
+            });
         }
         const end = getTime();
 
@@ -319,16 +336,18 @@ class ZRender {
     }
 
     /**
+     * @deprecated
      * Refresh hover immediately
      */
     refreshHoverImmediately() {
         if (this._disposed) {
             return;
         }
-        this._needsRefreshHover = false;
-        if (this.painter.refreshHover && this.painter.getType() === 'canvas') {
-            this.painter.refreshHover();
-        }
+        this._refresh({
+            animUpdate: false,
+            refresh: false,
+            refreshHover: true
+        });
     }
 
     /**

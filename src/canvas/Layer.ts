@@ -94,9 +94,9 @@ export default class Layer extends Eventful {
 
     __used = false
 
-    __drawIndex = 0
+    __drawIndex = 0 // The next displayList index to be drawn.
     __startIndex = 0
-    __endIndex = 0
+    __endIndex = 0 // The max displayList index owned by this layer + 1.
 
     // indices in the previous frame
     __prevStartIndex: number = null
