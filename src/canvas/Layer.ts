@@ -65,7 +65,12 @@ export interface LayerDrawCursor {
     // Mark using for one run of `Painter['refresh']`
     used: boolean
     // The next index (of `displayList`) to be drawn.
+    // CANVAS_INCREMENTAL_CASE_MULTIPLE_ELEMENTS is implemented by this pointer.
     drawIdx: number
+    // The first `notClear` el in this cursor to be drawn.
+    // If `-1`, no `notClear` el need to be drawn in this cursor in this pass.
+    // CANVAS_INCREMENTAL_CASE_SINGLE_ELEMENT is implemented by this pointer.
+    notClearIdx: number
     startIdx: number
     // The max index + 1 (of `displayList`) can be drawn.
     endIdx: number

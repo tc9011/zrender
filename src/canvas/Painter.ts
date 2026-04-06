@@ -129,6 +129,7 @@ function resetLayerDrawCursor(cursor: LayerDrawCursor): LayerDrawCursor {
     cursor.startIdx = cursor.drawIdx = cursor.endIdx = cursor.endIdxNew = 0;
     cursor.used = false;
     cursor.first = cursor.last = NaN;
+    cursor.notClearIdx = -1;
     // cursor.idsLen = 0;
     // NOTE: cursor.key should not be modified after being created.
     return cursor;
@@ -198,7 +199,7 @@ interface CanvasPainterInternal {
     // This list represents the existing layers and the actual z-order.
     layerStack: LayerKey[];
     // structure: _layers[zlevel][zlevel2]
-    // See more details in LAYER_STACKING
+    // See more details in CANVAS_LAYER_STACKING
     // CAVEAT:
     //  Do not iterate `layers`; iterate `layerStack` instead.
     layers: Layer[][];
@@ -527,7 +528,9 @@ export default class CanvasPainter implements PainterBase {
         eachLayer(this._i, function (layer) {
             let needDraw = false;
             eachCursorInLayer(layer, function (cursor) {
-                if (cursor.drawIdx < cursor.endIdx) {
+                if (cursor.drawIdx < cursor.endIdx
+                    || cursor.notClearIdx >= 0
+                ) {
                     needDraw = true;
                 }
             });
@@ -634,9 +637,16 @@ export default class CanvasPainter implements PainterBase {
         const startTime = useTimer && platformApi.getTime();
 
         // NOTICE: This loop is performance-sensitive, especially for large data.
-        let idx = layerCursor.drawIdx;
+        const drawIdxBegin = layerCursor.drawIdx;
+        const notClearIdx = layerCursor.notClearIdx;
+        let idx = notClearIdx >= 0 ? Math.min(notClearIdx, drawIdxBegin) : drawIdxBegin;
         for (; idx < layerCursor.endIdx; idx++) {
             const el = list[idx];
+
+            if (idx < drawIdxBegin && !el.notClear) {
+                // In this portion, all non-`notClear` elements do not need to be painted.
+                continue;
+            }
 
             if (el.__inHover) {
                 // To avoid repeatedly repaint hover layer in progressive rendering,
@@ -677,7 +687,7 @@ export default class CanvasPainter implements PainterBase {
         }
         brushLoopFinalize(ctx, scope);
 
-        layerCursor.drawIdx = idx;
+        layerCursor.drawIdx = Math.max(idx, drawIdxBegin); // `idx` may < `drawIdxBegin` due to `notClearIdx`.
     }
 
     /**
@@ -855,24 +865,26 @@ export default class CanvasPainter implements PainterBase {
             layers[
                 zlevel2 === ZLEVEL2_NORMAL_BELOW ? zlevel
                 : zlevel2 === ZLEVEL2_INCREMENTAL ? `${zlevel}.0${zlevel2}`
-                : `${zlevel}.${zlevel2}`
+                : `${zlevel}.${zlevel2}` // ZLEVEL2_NORMAL_ABOVE
             ] = layer;
         });
         return layers;
     }
 
     /**
-     * Two use patterns are covered per incremental layer:
-     *  [INCREMENTAL_CASE_SINGLE_ELEMENT]
+     * @tutorial [CANVAS_INCREMENTAL_LAYER_USE_CASES]
+     *  Two use patterns are covered per incremental layer:
+     *  [CANVAS_INCREMENTAL_CASE_SINGLE_ELEMENT]
      *    An single incremental element with a customized `buildPath`, using `Displayable['notClear']`
      *    to retain the rendered content.
-     *  [INCREMENTAL_CASE_MULTIPLE_ELEMENTS]
+     *  [CANVAS_INCREMENTAL_CASE_MULTIPLE_ELEMENTS]
      *    A run of consecutive incremental elements, progressively drawing per frame in `_paintList`. This
      *    is not an optimal approach for rendering due to the increasing cost of updating and sorting
      *    `displayList`. However, it support varying styles and can balance the cost between rendering and
      *    hit testing during hover (which may degrade with excessive points in single shape).
+     *  Notice, these two patterns can exist simultaneously in the same incremental layer.
      *
-     * [LAYER_STACKING]
+     * @tutorial [CANVAS_LAYER_STACKING]
      *  - An `Layer` instance represents a physical layer, typically a HTML Canvas.
      *  - Each `zlevel` will be splitted to 2 or 3 physical layers if incremental elements occur,
      *    designated by `zlevel2`. A full version can be like this:
@@ -885,7 +897,7 @@ export default class CanvasPainter implements PainterBase {
      *    `zlevel`, multiple runs of incremental elements share one physical layer (i.e., `zlevel2: 1`).
      *  - Theoretically, a physical layer can switch bettween incremental or non-incremental. But currently
      *    we do not support it.
-     *  - [LIMITED_TO_3_LAYERS_PER_ZLEVEL]
+     *  - [LIMITED_TO_3_CANVAS_LAYERS_PER_ZLEVEL]
      *    To avoid excessive HTML Canvas creation, at most 3 layers can be created for a single `zlevel`.
      *    If two runs of consecutive incremental elements are separated by some normal elements, those normal
      *    elements are painted on `zlevel: 2`, and all incremental elements are painted on `zlevel: 1`,
@@ -894,7 +906,7 @@ export default class CanvasPainter implements PainterBase {
      *  - NOTE: Elements do not necessarily have different z or z2 - even if all z or z2 are 0, z-order is
      *    determined by `add(el)` order.
      *
-     * [DISPLAY_LIST_SORTING_AND_LAYERING]
+     * @tutorial [DISPLAY_LIST_SORTING_AND_LAYERING]
      *  Currently there are 5 parameters to determine the layer and z-order for each element:
      *      <zlevel, zlevel2, incremental(LayerDrawCursor), z, z2>
      *  Only `zlevel`, `z` and `z2` are user specified.
@@ -906,10 +918,10 @@ export default class CanvasPainter implements PainterBase {
      *  incremental elements. And each `el.incremental` has its exclusive `LayerDrawCursor`. Take echarts
      *  as an example: if there are multiple "series" requiring incremental, e.g., a bar series and a
      *  candlestick series in a Cartesian, and their zlevel/z/z2 are typicall the same.
-     *  See LAYER_SAMPLE_CASE_3 for more details.
+     *  See CANVAS_LAYER_SAMPLE_CASE_3 for more details.
      *
      * Consider sample cases below to check the implementation:
-     *  - [LAYER_SAMPLE_CASE_1]:
+     *  - [CANVAS_LAYER_SAMPLE_CASE_1]:
      *    `zlevel:5` is explicitly specified by users.
      *    `zlevel:0` is the default.
      *      [[ layer_hover           zlevel:100000       ]]
@@ -919,12 +931,12 @@ export default class CanvasPainter implements PainterBase {
      *      [[ layer_normal_above_1  zlevel:0, zlevel2:2 ]]
      *      [[ layer_incremental_1   zlevel:0, zlevel2:1 ]]
      *      [[ layer_normal_below_1  zlevel:0, zlevel2:0 ]]
-     *  - [LAYER_SAMPLE_CASE_2]:
+     *  - [CANVAS_LAYER_SAMPLE_CASE_2]:
      *    No elements are before incremental elements.
      *      [[ layer_hover         zlevel: 100000      ]]
      *      [[ layer_normal_above  zlevel:0, zlevel2:2 ]]
      *      [[ layer_incremental   zlevel:0, zlevel2:1 ]]
-     *  - [LAYER_SAMPLE_CASE_3]:
+     *  - [CANVAS_LAYER_SAMPLE_CASE_3]:
      *    Multiple runs of consecutive incremental elements, may (or not) be separated by some normal elements.
      *    Suppose a sorted `displayList` is:
      *      `[{a_nor}, {b_inc:7}, {c_inc:7}, {d_nor}, {e_inc:9}, {f_inc:9}, {g_nor}]`.
@@ -941,21 +953,21 @@ export default class CanvasPainter implements PainterBase {
      *      [[                                         layerDrawCursor:7 {b_inc:7}, {c_inc:7} {m_inc:7}  ]]
      *      [[ layer_normal_below  zlevel:0, zlevel2:0 layerDrawCursor:0 {a_nor}                         ]]
      *
-     * [LAYER_DIRTY_RULES]:
+     * @tutorial [CANVAS_LAYER_DIRTY_RULES]:
      *  Only dirty layer will be cleared and repaint later. `layer.__dirty` is set by:
-     *  - REDRAW_BIT of every element. [LAYER_DIRTY_BY_REDRAW_BIT]
+     *  - REDRAW_BIT of every element. [CANVAS_LAYER_DIRTY_BY_REDRAW_BIT]
      *    For normal layers, currently REDRAW_BIT is the only reliable way to make sure repainting, since
      *    reorder is not checked. So we conservatively always dirty the layers if any REDRAW_BIT occur.
      *    For incremental layers, we aggressively dirty the layer only if drawn elements have REDRAW_BIT,
      *    since redorder of incremental elements hardly occurs.
      *  - Mismatching of `layerDrawCursor.first` and `layerDrawCursor.endIdx`.
-     *    [LAYER_CONTENT_RETAINED]:
+     *    [CANVAS_LAYER_CONTENT_RETAINED]:
      *      This strategy is mainly required by progressive rendering, where typicall new elements are
      *      appended, and repaint from the start per frame should be prevented. Otherwise, increasing
      *      draw calls can significantly block rendering. Additionally, If displayList indices of incremental
      *      elements are changed due to preceding elements of other layers, the drawing should not be restarted.
      *      Therefore, we record the first element to shift indices for this case.
-     *    [LAYER_FAIL_TO_DIRTY_IF_ONLY_REORDER]:
+     *    [CANVAS_LAYER_FAIL_TO_DIRTY_IF_ONLY_REORDER]:
      *      This strategy has also been applied to normal layers to prevent them from repainting in progressive
      *      frames. Upstream applications should remain the order of elements unchanged if no REDRAW_BIT is
      *      set - no checking for this currently. Otherwise, layers fail to dirty unexpectedly.
@@ -966,7 +978,7 @@ export default class CanvasPainter implements PainterBase {
      *
      * PENDING:
      *  - [PENDING_SEPARATE_DISPLAY_LIST]:
-     *    In INCREMENTAL_CASE_MULTIPLE_ELEMENTS, displayList sorting and `_updateAndAddDisplayable` will be
+     *    In CANVAS_INCREMENTAL_CASE_MULTIPLE_ELEMENTS, displayList sorting and `_updateAndAddDisplayable` will be
      *    executed per frame and significantly consume time in high element counts (indicatively, 1e6 in
      *    certain environments). Perhaps displayList can be separated by Layer or by LayerDrawCursor,
      *    and perform targeted optimization - omitting unnecessary sorting and `update()`.
@@ -991,6 +1003,7 @@ export default class CanvasPainter implements PainterBase {
             eachCursorInLayer(layer, function (cursor) {
                 cursor.used = false;
                 cursor.endIdxNew = 0;
+                cursor.notClearIdx = -1;
             });
         }, EACH_LAYER_BUILTIN_NOT_HOVER);
 
@@ -1016,7 +1029,7 @@ export default class CanvasPainter implements PainterBase {
                 zlevel2 = ZLEVEL2_INCREMENTAL;
             }
             else {
-                // See LIMITED_TO_3_LAYERS_PER_ZLEVEL
+                // See LIMITED_TO_3_CANVAS_LAYERS_PER_ZLEVEL
                 // If incremental elements appear, all subsequent normal elements use `zlevel2: 2`.
                 // else use `zlevel2: 0`.
                 zlevel2 = aboveIncrementalInCurrZLevel ? ZLEVEL2_NORMAL_ABOVE : ZLEVEL2_NORMAL_BELOW;
@@ -1042,7 +1055,7 @@ export default class CanvasPainter implements PainterBase {
 
                 if (!currCursor.used) { // Now `el` is the first element in `currCursor` in this pass.
                     currCursor.used = true;
-                    if (!paintAll && currCursor.first === el.id) { // See LAYER_CONTENT_RETAINED
+                    if (!paintAll && currCursor.first === el.id) { // See CANVAS_LAYER_CONTENT_RETAINED
                         const idxShift = idx - currCursor.startIdx;
                         currCursor.startIdx = idx;
                         currCursor.drawIdx += idxShift; // May be further modified at last.
@@ -1060,7 +1073,7 @@ export default class CanvasPainter implements PainterBase {
             // Else `currCursor` is not changed, keep using it. This is the most common case,
             // so we retain this past path for performance.
 
-            // See LAYER_FAIL_TO_DIRTY_IF_ONLY_REORDER
+            // See CANVAS_LAYER_FAIL_TO_DIRTY_IF_ONLY_REORDER
             // if (zlevel2 !== 1) { // Only for non-incremental layer
             //     const idxInCursor = idx - currCursor.startIdx;
             //     if (idxInCursor < LAYER_CURSOR_IDS_MAX && currCursor.ids[idxInCursor] !== el.id) {
@@ -1074,13 +1087,19 @@ export default class CanvasPainter implements PainterBase {
 
             currCursor.endIdxNew = idx + 1; // Use `endIdxNew` to further check the retained render at last.
 
+            // See CANVAS_LAYER_DIRTY_BY_REDRAW_BIT
             if ((el.__dirty & REDRAW_BIT)
                 && !el.__inHover // Ignore dirty elements in hover layer.
-                && (!elIncremental
-                    || (!el.notClear && idx < currCursor.drawIdx)
-                ) // See LAYER_DIRTY_BY_REDRAW_BIT
             ) {
-                currLayer.__dirty = true;
+                if (!elIncremental // Always dirty the entire normal layer if any dirty occurs.
+                    || (!el.notClear && idx < currCursor.drawIdx)
+                ) {
+                    currLayer.__dirty = true;
+                }
+                if (elIncremental && el.notClear && currCursor.notClearIdx < 0) {
+                    // If `notClear` elements are dirty, do not clear the layer, but they need to be repainted.
+                    currCursor.notClearIdx = idx;
+                }
             }
         } // The end of displayList travel.
 
@@ -1103,7 +1122,7 @@ export default class CanvasPainter implements PainterBase {
                     const endIdxNew = cursor.endIdxNew;
                     if (isIncrementalLayer(layer)
                         ? endIdxNew < cursor.drawIdx
-                        : ( // See LAYER_FAIL_TO_DIRTY_IF_ONLY_REORDER
+                        : ( // See CANVAS_LAYER_FAIL_TO_DIRTY_IF_ONLY_REORDER
                             endIdxNew !== cursor.endIdx
                             || !endIdxNew
                             || list[endIdxNew - 1].id !== cursor.last
