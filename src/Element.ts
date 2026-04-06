@@ -307,6 +307,23 @@ const tmpTextPosCalcRes = {} as TextPositionCalculationResult;
 const tmpBoundingRect = new BoundingRect(0, 0, 0, 0);
 const tmpInnerTextTrans: number[] = [];
 
+
+// It indicates a status of the element - whether it should be rendered or have been rendered
+// in a hover layer.
+// It also record the restriction of props changes when entering the hover status.
+// A falsy value means not in haver layer; a truthy value means in haver layer.
+export type InHoverLayerKind =
+    typeof IN_HOVER_LAYER_KIND_NO
+    | typeof IN_HOVER_LAYER_KIND_ONLY_STYLE_CHANGE;
+    // | typeof IN_HOVER_LAYER_KIND_NO_LIMIT;
+// Not in hover layer.
+export const IN_HOVER_LAYER_KIND_NO = 0;
+// In hover layer and only style change when entering hover layer.
+export const IN_HOVER_LAYER_KIND_ONLY_STYLE_CHANGE = 1;
+// In hover layer and no restriction of changing.
+// export const IN_HOVER_LAYER_KIND_NO_LIMIT = 2;
+
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 interface Element<Props extends ElementProps = ElementProps> extends Transformable,
     Eventful<{
@@ -2141,21 +2158,6 @@ function shouldUseHoverLayer(
 function isTextRelatedEl(el: Element<ElementProps>): boolean {
     return el.type === 'text' || el.type === 'tspan';
 }
-
-// It indicates a status of the element - whether it should be rendered or have been rendered
-// in a hover layer.
-// It also record the restriction of props changes when entering the hover status.
-// A falsy value means not in haver layer; a truthy value means in haver layer.
-export type InHoverLayerKind =
-    typeof IN_HOVER_LAYER_KIND_NO
-    | typeof IN_HOVER_LAYER_KIND_ONLY_STYLE_CHANGE;
-    // | typeof IN_HOVER_LAYER_KIND_NO_LIMIT;
-// Not in hover layer.
-export const IN_HOVER_LAYER_KIND_NO = 0;
-// In hover layer and only style change when entering hover layer.
-export const IN_HOVER_LAYER_KIND_ONLY_STYLE_CHANGE = 1;
-// In hover layer and no restriction of changing.
-// export const IN_HOVER_LAYER_KIND_NO_LIMIT = 2;
 
 
 function canTransition(
