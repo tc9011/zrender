@@ -861,7 +861,7 @@ export default class CanvasPainter implements PainterBase {
     getLayers() {
         const layers: Record<string, Layer> = {};
         eachLayer(this._i, function (layer, zlevel, zlevel2) {
-            layers[`${zlevel}|${zlevel2}`] = layer;
+            layers[layer.id] = layer;
         });
         return layers;
     }
