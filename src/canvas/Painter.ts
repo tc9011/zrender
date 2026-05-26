@@ -1,4 +1,4 @@
-import {devicePixelRatio} from '../config';
+import { getDevicePixelRatio } from '../config';
 import * as util from '../core/util';
 import Layer, { isIncrementalLayer, LayerConfig, LayerDrawCursor } from './Layer';
 import requestAnimationFrame from '../animation/requestAnimationFrame';
@@ -267,7 +267,7 @@ export default class CanvasPainter implements PainterBase {
 
         this._opts = opts = util.extend({}, opts || {}) as CanvasPainterOption;
 
-        this.dpr = opts.devicePixelRatio || devicePixelRatio;
+        this.dpr = opts.devicePixelRatio || getDevicePixelRatio();
 
         this._singleCanvas = singleCanvas;
 
@@ -306,7 +306,6 @@ export default class CanvasPainter implements PainterBase {
                 // TODO sting?
                 height = opts.height as number;
             }
-            this.dpr = opts.devicePixelRatio || 1;
 
             // Use canvas width and height directly
             rootCanvas.width = width * this.dpr;
@@ -1204,11 +1203,22 @@ export default class CanvasPainter implements PainterBase {
 
     /**
      * 区域大小变化后重绘
+     * @param width 宽度
+     * @param height 高度
+     * @param devicePixelRatio 设备像素比，如果未指定，则自动获取当前设备像素比
      */
     resize(
         width?: number | string,
-        height?: number | string
+        height?: number | string,
+        devicePixelRatio?: number
     ) {
+        const newDpr = devicePixelRatio || getDevicePixelRatio();
+
+        const dprChanged = newDpr !== this.dpr;
+        if (dprChanged) {
+            this.dpr = newDpr;
+        }
+
         if (!this._domRoot.style) { // Maybe in node or worker
             if (width == null || height == null) {
                 return;
@@ -1217,7 +1227,7 @@ export default class CanvasPainter implements PainterBase {
             this._width = width as number;
             this._height = height as number;
 
-            this._ensureLayer(CANVAS_ZLEVEL).resize(width as number, height as number);
+            this._ensureLayer(CANVAS_ZLEVEL).resize(width as number, height as number, this.dpr);
         }
         else {
             const domRoot = this._domRoot;
@@ -1236,12 +1246,12 @@ export default class CanvasPainter implements PainterBase {
             domRoot.style.display = '';
 
             // 优化没有实际改变的resize
-            if (this._width !== width || height !== this._height) {
+            if (this._width !== width || height !== this._height || dprChanged) {
                 domRoot.style.width = width + 'px';
                 domRoot.style.height = height + 'px';
 
                 eachLayer(this._i, function (layer) {
-                    layer.resize(width as number, height as number);
+                    layer.resize(width as number, height as number, this.dpr);
                 });
 
                 this.refresh({paintAll: true});

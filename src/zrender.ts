@@ -360,12 +360,13 @@ class ZRender {
     resize(opts?: {
         width?: number| string
         height?: number | string
+        devicePixelRatio?: number
     }) {
         if (this._disposed) {
             return;
         }
         opts = opts || {};
-        this.painter.resize(opts.width, opts.height);
+        this.painter.resize(opts.width, opts.height, opts.devicePixelRatio);
         this.handler.resize();
     }
 

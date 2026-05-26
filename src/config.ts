@@ -1,14 +1,16 @@
 import env from './core/env';
 
-let dpr = 1;
+export function getDevicePixelRatio(): number {
+    let dpr = 1;
 
-// If in browser environment
-if (env.hasGlobalWindow) {
-    dpr = Math.max(
-        window.devicePixelRatio
-        || (window.screen && (window.screen as any).deviceXDPI / (window.screen as any).logicalXDPI)
-        || 1, 1
-    );
+    // If in browser environment
+    if (env.hasGlobalWindow) {
+        dpr = window.devicePixelRatio
+            || (window.screen && (window.screen as any).deviceXDPI / (window.screen as any).logicalXDPI)
+            || 1;
+    }
+
+    return dpr;
 }
 
 /**
@@ -17,10 +19,6 @@ if (env.hasGlobalWindow) {
  * 1: console.error, for debug.
  */
 export const debugMode = 0;
-
-// retina 屏幕优化
-export const devicePixelRatio = dpr;
-
 
 /**
  * Determine when to turn on dark mode based on the luminance of backgroundColor

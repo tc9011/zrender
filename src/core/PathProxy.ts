@@ -9,7 +9,6 @@
 
 import * as vec2 from './vector';
 import BoundingRect from './BoundingRect';
-import {devicePixelRatio as dpr} from '../config';
 import { fromLine, fromCubic, fromQuadratic, fromArc } from './bbox';
 import { cubicLength, cubicSubdivide, quadraticLength, quadraticSubdivide } from './curve';
 
@@ -177,6 +176,7 @@ export default class PathProxy {
         // Compat. Previously there is no segmentIgnoreThreshold.
         segmentIgnoreThreshold = segmentIgnoreThreshold || 0;
         if (segmentIgnoreThreshold > 0) {
+            const dpr = this.dpr || 1;
             this._ux = mathAbs(segmentIgnoreThreshold / dpr / sx) || 0;
             this._uy = mathAbs(segmentIgnoreThreshold / dpr / sy) || 0;
         }
